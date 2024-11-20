@@ -1,4 +1,6 @@
 # Pradeepa Shri Jothinathan - 1001241839
+
+
 import socket
 import select
 import random
@@ -25,7 +27,12 @@ def chat_client():
     name2 = ""
     flag = 0
     add, cl, s = server_client_connect()
+    s.connect(add) # Accept the connection on the server 
+    sideconn, client_addr = cl.accept()
+    print(f"Server accepted connection from {client_addr}")
+ 
 
+    print("hello1")
     # connect to server
     try:
         s.connect((host, port))
@@ -179,6 +186,7 @@ def server_client_connect():
     :rtype: tuple,socket,socket
     :return:  address, listening socket, receiving socket
     """
+    """
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     cl = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -186,9 +194,22 @@ def server_client_connect():
     s.settimeout(2)
     cl.settimeout(2)
     r = random.randint(49152, 65535)
-    add = tuple(['localhost'] + [r])
+   ## add = tuple(['localhost'] + [r])
+    add = ('localhost', r)
     cl.bind(add)
     cl.listen(5)
+    return add, cl, s
+    """
+    cl = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    cl.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)     # Connecting socket (client)    
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)   
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)     # Set timeouts    
+    cl.settimeout(2)     
+    s.settimeout(2)     # Bind the listening socket to a random port and listen    
+    r = random.randint(49152, 65535)     
+    add = ('localhost', r) # Create server 
+    cl.bind(add) # **Changed Line**: Bind the listening socket (`cl`) to the address 
+    cl.listen(5) # Start listening on the server socket# Return the server address, listening socket, and client socket
     return add, cl, s
 
 
@@ -247,6 +268,26 @@ def find_between(s, first, last):
 
 
 def main():
+    host = '127.0.0.1'  # Server address
+    port = 6000        # Same port as server
+
+# Create a socket object
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+# Connect to the server
+    client_socket.connect((host, port))
+    print("Connected to server {}:{}".format(host, port))
+
+    # Send data to the server
+    message = "Hello from client!"
+    client_socket.send(message.encode())
+
+    # Receive response from the server
+    response = client_socket.recv(1024).decode()
+    print("Received from server:", response)
+
+#    Close the connection
+    client_socket.close()
     sys.exit(chat_client())
 
 
