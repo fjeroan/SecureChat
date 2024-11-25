@@ -1,10 +1,9 @@
 import socket
 import threading
-import sys
 
-# Global list to store connected clients
-clients = []
-clients_lock = threading.Lock()  # Lock for thread-safe operations on the clients list
+# Global dictionary to store clients by their usernames
+clients = {}
+clients_lock = threading.Lock()  # Lock for thread-safe operations on the clients dictionary
 server_socket = None  # To store the server socket
 
 def handle_client(client_socket, client_address):
@@ -14,39 +13,50 @@ def handle_client(client_socket, client_address):
     global clients
     print(f"Connection established with {client_address}")
     
-    # Add the client to the list of connected clients
+    # Ask the client for a username and add to the clients dictionary
+    client_socket.send("Please enter your username:".encode('utf-8'))
+    username = client_socket.recv(1024).decode('utf-8')
+    
+    # Ensure username is unique
     with clients_lock:
-        clients.append((client_socket, client_address))
-        print(f"Clients connected: {[addr for _, addr in clients]}")
-
-    # Send the list of connected clients to the new client
-    with clients_lock:
-        # Exclude the new client from the list sent to the client
-        connected_clients = [addr for _, addr in clients if addr != client_address]
-        client_list_message = f"Connected clients: {connected_clients}"
-        client_socket.send(client_list_message.encode('utf-8'))
+        if username in clients:
+            client_socket.send("Username already taken. Disconnecting.".encode('utf-8'))
+            client_socket.close()
+            return
+        
+        clients[username] = client_socket
+        print(f"Clients connected: {list(clients.keys())}")
 
     try:
+        # Send the list of connected clients to the new client
+        with clients_lock:
+            connected_clients = list(clients.keys())
+            connected_clients.remove(username)  # Exclude the new client from the list
+            client_list_message = f"Connected clients: {connected_clients}"
+            client_socket.send(client_list_message.encode('utf-8'))
+
         while True:
             # Receive message from client
             message = client_socket.recv(1024).decode('utf-8')
             if not message:  # If the client closes the connection
                 break
-            print(f"Message from {client_address}: {message}")
+            print(f"Message from {username}: {message}")
 
-            # Broadcast the message to all connected clients (optional feature)
-            broadcast_message(f"{client_address} says: {message}", client_socket)
+            # Broadcast the message to all connected clients (except the sender)
+            broadcast_message(f"{username} says: {message}", client_socket)
 
             # Send an acknowledgment back to the sender
             response = f"Server received: {message}"
             client_socket.send(response.encode('utf-8'))
+
     except Exception as e:
         print(f"Error with client {client_address}: {e}")
     finally:
-        # Remove the client from the list when they disconnect
+        # Remove the client from the dictionary when they disconnect
         with clients_lock:
-            clients = [c for c in clients if c[0] != client_socket]
-            print(f"Clients connected: {[addr for _, addr in clients]}")
+            if username in clients:
+                del clients[username]
+                print(f"Clients connected: {list(clients.keys())}")
         
         # Close the connection
         print(f"Connection closed with {client_address}")
@@ -58,12 +68,12 @@ def broadcast_message(message, sender_socket):
     """
     global clients
     with clients_lock:
-        for client_socket, _ in clients:
+        for username, client_socket in clients.items():
             if client_socket != sender_socket:  # Don't send the message back to the sender
                 try:
                     client_socket.send(message.encode('utf-8'))
                 except Exception as e:
-                    print(f"Error broadcasting to client: {e}")
+                    print(f"Error broadcasting to client {username}: {e}")
 
 def stop_server():
     """
@@ -74,7 +84,7 @@ def stop_server():
 
     # Close all client connections
     with clients_lock:
-        for client_socket, _ in clients:
+        for client_socket in clients.values():
             client_socket.close()
 
     # Close the server socket
@@ -114,7 +124,6 @@ def start_server():
         # Catch the Ctrl + C interrupt to shut down the server gracefully
         print("\nServer is shutting down...")
         stop_server()
-        sys.exit(0)  # Exit the program
 
 if __name__ == "__main__":
     start_server()
