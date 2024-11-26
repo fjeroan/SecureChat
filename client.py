@@ -1,54 +1,29 @@
-"""import socket
-
-def start_client():
-    # Create a socket object
-    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    
-    # Define server host and port to connect to
-    host = '127.0.0.1'  # Server address
-    port = 12345
-
-    try:
-        # Connect to the server
-        client_socket.connect((host, port))
-        print(f"Connected to server at {host}:{port}")
-
-        response = client_socket.recv(1024).decode('utf-8')
-        print(f"Response from server: {response}")
-
-        # Send a message to the server
-        message = input("Enter a message for the server: ")
-        client_socket.send(message.encode('utf-8'))
-
-        #setting up the loop to communicate all the time
-        notdone = True;
-
-        while notdone:
-            message = input("Enter userName or type quit to quit: ")
-            if message == "quit":
-                notdone = False
-                break
-            response = client_socket.recv(1024).decode('utf-8')
-            print(f"Response from server: {response}")
-            client_socket.send(message.encode('utf-8'))
-                
-            
-
-        # Receive and print the server's response
-        response = client_socket.recv(1024).decode('utf-8')
-        print(f"Response from server: {response}")
-    except Exception as e:
-        print(f"Error: {e}")
-    finally:
-        # Close the socket
-        client_socket.close()
-
-if __name__ == "__main__":
-    start_client()
-"""
 import socket
+import threading
+
+def receive_messages(client_socket):
+    """
+    Continuously receive messages from the server and print them.
+    """
+    while True:
+        try:
+            # Receive messages from the server
+            message = client_socket.recv(1024).decode('utf-8')
+            if message:
+                print(f"\n{message}\n")  # Print received message, ensuring it doesn't interrupt input
+            else:
+                # If the server closes the connection
+                print("Server has closed the connection.")
+                break
+        except Exception as e:
+            print(f"Error receiving message: {e}")
+            break
+    client_socket.close()
 
 def start_client():
+    """
+    Starts the client, connects to the server, and allows sending/receiving messages.
+    """
     # Create a socket object
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
@@ -61,41 +36,27 @@ def start_client():
         client_socket.connect((host, port))
         print(f"Connected to the server at {host}:{port}")
 
-        # Receive the prompt for the username
-        username_prompt = client_socket.recv(1024).decode('utf-8')
-        print(username_prompt)
+        # Start a thread to continuously receive messages from the server
+        receive_thread = threading.Thread(target=receive_messages, args=(client_socket,))
+        receive_thread.daemon = True  # Ensure thread exits when the main program exits
+        receive_thread.start()
 
-        # Send the username to the server
-        username = input("Enter your username: ")
-        client_socket.send(username.encode('utf-8'))
-
-        # Receive the list of connected clients
-        connected_clients = client_socket.recv(1024).decode('utf-8')
-        print(connected_clients)
-
-        # Main loop to allow sending multiple messages
-        notDone = True
-        while notDone:
+        # Main loop for sending messages
+        while True:
             message = input("Enter message to send (or 'exit' to quit): ")
             if message.lower() == 'exit':
-                notDone = False
-                break # Exit the loop if the user types 'exit'
-                
-
+                print("Exiting...")
+                break  # Exit the loop and close the connection
             # Send the message to the server
             client_socket.send(message.encode('utf-8'))
-
-            # Receive the server's response
-            response = client_socket.recv(1024).decode('utf-8')
-            print(f"Server says: {response}")
 
     except Exception as e:
         print(f"Error: {e}")
 
     finally:
         # Close the client connection
-        print("Closing connection...")
         client_socket.close()
+        print("Connection closed.")
 
 if __name__ == "__main__":
     start_client()
