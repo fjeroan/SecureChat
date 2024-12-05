@@ -1,69 +1,81 @@
 import socket
 import threading
 
-# Global dictionaries
-clients = {}  # Maps usernames to socket objects
-sessions = {}  # Maps usernames to their peer in a session
-
+#Maps usernames to sockets
+clients = {}  
+#maps usernames to their peer
+sessions = {}  
 
 def handle_client(client_socket, client_address):
-    """
-    Handles communication with a single client.
-    """
+   
+   # Handles communication with a single client.
+   
     global clients, sessions
 
     print(f"Connection established with {client_address}")
 
-    # Request username
+    #sending the client the public key
+    #client_socket.send(public_key_pem)
+
+
+    # Requesting username from client
     client_socket.send("Please enter your username:".encode('utf-8'))
     username = client_socket.recv(1024).decode('utf-8').strip()
 
-    # Ensure the username is unique
+    
     if username in clients:
         client_socket.send("Username already taken. Disconnecting.".encode('utf-8'))
         client_socket.close()
         return
 
-    # Add the client to the list of connected clients
+    # Adding the client to the list of connected clients
     clients[username] = client_socket
     print(f"Clients connected: {list(clients.keys())}")
     broadcast_client_list()
 
-    # Notify client
-    client_socket.send(f"Welcome, {username}! You are now connected.".encode('utf-8'))
+    client_socket.send(f"Welcome, {username}! You are now connected. Type /help to find commands".encode('utf-8'))
 
+    #handling the client messages
     try:
         while True:
-            # Receive a message from the client
             message = client_socket.recv(1024).decode('utf-8').strip()
             if not message:
                 break
 
-            # Handle commands
+            #creating session with clients
             if message.startswith("/startsession"):
                 start_private_session(username, message)
+            #end session
             elif message.startswith("/end"):
                 end_private_session(username)
+            #send client list
+            elif message.startswith("/list"):
+                broadcast_client_list()
+            #give list of commands to client
+            elif message.startswith("/help"):
+                client_socket.send("/startsession <username> - to start a session with a user\n/end - to end a private session\n/list - to see a list of connected users\n/exit - to close connection with server".encode('utf-8'))
+            #exit
             elif message == "/exit":
                 break
             else:
                 route_message(username, message)
 
     except Exception as e:
+
         print(f"Error with client {username}: {e}")
+    
     finally:
-        # Cleanup on disconnect
+        
+        #closing the sockets
         disconnect_client(username)
         client_socket.close()
 
 
+#start private session
 def start_private_session(sender, message):
-    """
-    Starts a private session between two users.
-    """
+   
     global sessions
 
-    # Parse the target username
     parts = message.split(" ", 1)
     if len(parts) < 2:
         clients[sender].send("Usage: /startsession <username>".encode('utf-8'))
@@ -79,17 +91,16 @@ def start_private_session(sender, message):
         clients[sender].send("One of you is already in a session.".encode('utf-8'))
         return
 
-    # Establish the session
+    # Establishing the session
     sessions[sender] = target
     sessions[target] = sender
     clients[sender].send(f"Private session started with {target}.".encode('utf-8'))
     clients[target].send(f"Private session started with {sender}.".encode('utf-8'))
 
 
+#ends private session
 def end_private_session(username):
-    """
-    Ends a private session for the given user.
-    """
+
     global sessions
 
     if username in sessions:
@@ -99,13 +110,13 @@ def end_private_session(username):
         clients[username].send("Private session ended.".encode('utf-8'))
         clients[peer].send("Private session ended.".encode('utf-8'))
 
-
+    
+#Routes the message
 def route_message(sender, message):
-    """
-    Routes a message either to the peer in a private session or broadcasts it.
-    """
+
     if sender in sessions:
-        # Send to the peer in the private session
+
+        
         peer = sessions[sender]
         if peer in clients:
             try:
@@ -117,14 +128,11 @@ def route_message(sender, message):
             clients[sender].send("Your peer has disconnected.".encode('utf-8'))
             end_private_session(sender)
     else:
-        # Broadcast to all clients
         broadcast_message(f"{sender}: {message}", exclude=sender)
 
-
+#sends message to all connected clients
 def broadcast_message(message, exclude=None):
-    """
-    Sends a message to all connected clients except the excluded one.
-    """
+
     for user, client in clients.items():
         if user != exclude:
             try:
@@ -133,10 +141,9 @@ def broadcast_message(message, exclude=None):
                 print(f"Error broadcasting to {user}: {e}")
 
 
+#sends client list whenever client requests it
 def broadcast_client_list():
-    """
-    Sends an updated list of connected clients to all clients.
-    """
+
     client_list = list(clients.keys())
     message = f"Updated client list: {client_list}"
     for client in clients.values():
@@ -147,9 +154,7 @@ def broadcast_client_list():
 
 
 def disconnect_client(username):
-    """
-    Handles client disconnection.
-    """
+
     global clients, sessions
 
     if username in clients:
@@ -163,9 +168,7 @@ def disconnect_client(username):
 
 
 def start_server():
-    """
-    Starts the server and listens for incoming connections.
-    """
+  
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind(('127.0.0.1', 12345))
     server_socket.listen(5)
@@ -182,3 +185,55 @@ def start_server():
 
 if __name__ == "__main__":
     start_server()
+
+
+
+# implementing the RSA authentication
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes
+
+# Generate RSA key pair
+private_key = rsa.generate_private_key(
+    public_exponent=65537,
+    key_size=2048,
+)
+
+# Extract the public key
+public_key = private_key.public_key()
+
+# Serialize the public key for sending to clients
+public_key_pem = public_key.public_bytes(
+    encoding=serialization.Encoding.PEM,
+    format=serialization.PublicFormat.SubjectPublicKeyInfo
+)
+
+# Serialize the private key for internal use
+private_key_pem = private_key.private_bytes(
+    encoding=serialization.Encoding.PEM,
+    format=serialization.PrivateFormat.TraditionalOpenSSL,
+    encryption_algorithm=serialization.NoEncryption()
+)
+
+
+
+def authenticate_client(client_socket):
+    # Receive encrypted token
+    encrypted_token = client_socket.recv(1024)
+
+    # Decrypt the token using the server's private key
+    try:
+        decrypted_token = private_key.decrypt(
+            encrypted_token,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+        print(f"Decrypted token: {decrypted_token.decode('utf-8')}")
+        return True
+    except Exception as e:
+        print(f"Authentication failed: {e}")
+        return False

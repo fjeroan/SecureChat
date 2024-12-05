@@ -43,7 +43,7 @@ def start_client():
 
         # Main loop for sending messages
         while True:
-            message = input("Enter message to send (or 'exit' to quit): ")
+            message = input()#"Enter message to send (or 'exit' to quit): ")
             if message.lower() == 'exit':
                 print("Exiting...")
                 break  # Exit the loop and close the connection
@@ -60,3 +60,11 @@ def start_client():
 
 if __name__ == "__main__":
     start_client()
+
+from cryptography.hazmat.primitives import serialization
+
+# Receive the server's public key
+server_public_key_pem = client_socket.recv(1024)
+
+# Load the public key
+server_public_key = serialization.load_pem_public_key(server_public_key_pem)
