@@ -1,16 +1,14 @@
 import socket
 import threading
 
+#receiving messages
 def receive_messages(client_socket):
-    """
-    Continuously receive messages from the server and print them.
-    """
+ 
     while True:
         try:
-            # Receive messages from the server
             message = client_socket.recv(1024).decode('utf-8')
             if message:
-                print(f"\n{message}\n")  # Print received message, ensuring it doesn't interrupt input
+                print(f"\n{message}\n")  
             else:
                 # If the server closes the connection
                 print("Server has closed the connection.")
@@ -20,11 +18,9 @@ def receive_messages(client_socket):
             break
     client_socket.close()
 
+#starts the client
 def start_client():
-    """
-    Starts the client, connects to the server, and allows sending/receiving messages.
-    """
-    # Create a socket object
+  
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
     # Define server host and port
@@ -32,21 +28,21 @@ def start_client():
     port = 12345
 
     try:
-        # Connect to the server
+        # Connecting to the server
         client_socket.connect((host, port))
         print(f"Connected to the server at {host}:{port}")
 
-        # Start a thread to continuously receive messages from the server
+        #create thread so can recieve messages
         receive_thread = threading.Thread(target=receive_messages, args=(client_socket,))
-        receive_thread.daemon = True  # Ensure thread exits when the main program exits
+        receive_thread.daemon = True  
         receive_thread.start()
 
         # Main loop for sending messages
         while True:
-            message = input()#"Enter message to send (or 'exit' to quit): ")
+            message = input()
             if message.lower() == 'exit':
                 print("Exiting...")
-                break  # Exit the loop and close the connection
+                break  
             # Send the message to the server
             client_socket.send(message.encode('utf-8'))
 
@@ -60,6 +56,7 @@ def start_client():
 
 if __name__ == "__main__":
     start_client()
+
 
 from cryptography.hazmat.primitives import serialization
 

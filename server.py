@@ -10,13 +10,13 @@ def handle_client(client_socket, client_address):
    
    # Handles communication with a single client.
    
-    global clients, sessions
+    global clients, sessions, public_key_pem
+
+    #client_socket.send(public_key_pem)
 
     print(f"Connection established with {client_address}")
 
-    #sending the client the public key
-    #client_socket.send(public_key_pem)
-
+   
 
     # Requesting username from client
     client_socket.send("Please enter your username:".encode('utf-8'))
@@ -187,12 +187,8 @@ if __name__ == "__main__":
     start_server()
 
 
-
-# implementing the RSA authentication
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives import hashes
 
 # Generate RSA key pair
 private_key = rsa.generate_private_key(
@@ -216,7 +212,8 @@ private_key_pem = private_key.private_bytes(
     encryption_algorithm=serialization.NoEncryption()
 )
 
-
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes
 
 def authenticate_client(client_socket):
     # Receive encrypted token
@@ -237,3 +234,4 @@ def authenticate_client(client_socket):
     except Exception as e:
         print(f"Authentication failed: {e}")
         return False
+
