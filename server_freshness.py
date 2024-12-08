@@ -1,25 +1,42 @@
-
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import padding as sym_padding
 import socket
 import threading
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives import hmac
+import hmac
+import hashlib
+import os
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes
-import os
-import time
 
-# Global mappings
-clients = {}
-sessions = {}  # Maps sender to target for private sessions
-session_keys = {}  # Maps sender to AES keys for private sessions
-
-def generate_aes_key():
-    """Generates a 256-bit AES key."""
-    return os.urandom(32)
-
-# Global mappings
 clients = {}
 sessions = {}
+session_secrets = {}
+
+# AES encryption
+def encrypt_message(secret, plaintext):
+    iv = os.urandom(16)
+    cipher = Cipher(algorithms.AES(secret), modes.CBC(iv))
+    encryptor = cipher.encryptor()
+
+    padder = sym_padding.PKCS7(128).padder()
+    padded_data = padder.update(plaintext.encode()) + padder.finalize()
+
+    ciphertext = encryptor.update(padded_data) + encryptor.finalize()
+    return iv + ciphertext
+
+def decrypt_message(secret, data):
+    iv = data[:16]
+    ciphertext = data[16:]
+
+    cipher = Cipher(algorithms.AES(secret), modes.CBC(iv))
+    decryptor = cipher.decryptor()
+
+    padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+
+    unpadder = sym_padding.PKCS7(128).unpadder()
+    plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()
+    return plaintext.decode()
+
 
 # RSA key generation
 private_key = rsa.generate_private_key(
@@ -29,17 +46,23 @@ private_key = rsa.generate_private_key(
 
 public_key = private_key.public_key()
 
-# Serialize public key for sending to clients
+# Serializing public key
 public_key_pem = public_key.public_bytes(
     encoding=serialization.Encoding.PEM,
     format=serialization.PublicFormat.SubjectPublicKeyInfo
 )
 
+# Helper function to generate HMAC
+def generate_hmac(secret, message):
+    return hmac.new(secret, message.encode(), hashlib.sha256).hexdigest()
 
+# Helper function to verify HMAC
+def verify_hmac(secret, message, signature):
+    expected_hmac = generate_hmac(secret, message)
+    return hmac.compare_digest(expected_hmac, signature)
+
+# Authenticate client
 def authenticate_client(client_socket):
-    """
-    Authenticates a client using RSA.
-    """
     try:
         # Send the public key to the client
         client_socket.send(public_key_pem)
@@ -47,7 +70,7 @@ def authenticate_client(client_socket):
         # Receive the encrypted token from the client
         encrypted_token = client_socket.recv(1024)
 
-        # Decrypt the token using the server's private key
+        # Decrypt the token
         decrypted_token = private_key.decrypt(
             encrypted_token,
             padding.OAEP(
@@ -57,7 +80,7 @@ def authenticate_client(client_socket):
             )
         )
 
-        # Extract the username from the decrypted token
+        # Extracting the username
         username = decrypted_token.decode('utf-8').split('_')[0]
         print(f"Client {username} authenticated successfully.")
         return username
@@ -66,25 +89,21 @@ def authenticate_client(client_socket):
         client_socket.send("AUTH_FAILURE".encode())
         return None
 
-
+# Handles client communication
 def handle_client(client_socket, client_address):
-    """
-    Handles a single client connection.
-    """
-    global clients, sessions
+    global clients, sessions, session_secrets
 
     print(f"Connection established with {client_address}")
 
-    # Authenticate the client
+    # Authenticating the client
     username = authenticate_client(client_socket)
     if not username:
         client_socket.close()
         return
 
-    # Add the client to the connected clients list
     clients[username] = client_socket
     client_socket.send("AUTH_SUCCESS".encode())
-    print(f"Clients connected: {list(clients.keys())}\n")
+    print(f"Clients connected: {list(clients.keys())}")
     broadcast_client_list()
 
     client_socket.send(f"\nWelcome, {username}! Type /help for commands.".encode())
@@ -116,30 +135,8 @@ def handle_client(client_socket, client_address):
         disconnect_client(username)
         client_socket.close()
 
-def encrypt_message(message, key):
-    """
-    Encrypts a message using AES-GCM.
-    """
-    nonce = os.urandom(12)  # GCM requires a 12-byte nonce
-    cipher = Cipher(algorithms.AES(key), modes.GCM(nonce))
-    encryptor = cipher.encryptor()
-    ciphertext = encryptor.update(message.encode()) + encryptor.finalize()
-    return nonce, ciphertext, encryptor.tag
-
-
-def decrypt_message(nonce, ciphertext, tag, key):
-    """
-    Decrypts a message using AES-GCM.
-    """
-    cipher = Cipher(algorithms.AES(key), modes.GCM(nonce, tag))
-    decryptor = cipher.decryptor()
-    plaintext = decryptor.update(ciphertext) + decryptor.finalize()
-    return plaintext.decode()
-
-
 def start_private_session(sender, message):
-    """Starts a private session between two users."""
-    global sessions, session_keys
+    global sessions, session_secrets
 
     parts = message.split(" ", 1)
     if len(parts) < 2:
@@ -155,72 +152,63 @@ def start_private_session(sender, message):
         clients[sender].send("One of you is already in a session.".encode())
         return
 
-    # Generate a shared AES key for the session
-    shared_key = generate_aes_key()
-    session_keys[sender] = shared_key
-    session_keys[target] = shared_key
+    # Generate a shared secret for HMAC
+    secret = hashlib.sha256(os.urandom(16)).digest()
+    session_secrets[sender] = secret
+    session_secrets[target] = secret
 
-    # Notify both users about the session and share the key
     sessions[sender] = target
     sessions[target] = sender
     clients[sender].send(f"Private session started with {target}.".encode())
     clients[target].send(f"Private session started with {sender}.".encode())
 
-def route_message(sender, message):
-    """Routes an encrypted message to the intended recipient."""
-    global sessions, session_keys
-
-    if sender in sessions:
-        peer = sessions[sender]
-        if peer in clients:
-            # Encrypt the message before sending
-            key = session_keys[sender]
-            nonce, ciphertext, tag = encrypt_message(message, key)
-            payload = f"{base64.b64encode(nonce).decode()}|{base64.b64encode(ciphertext).decode()}|{base64.b64encode(tag).decode()}"
-            clients[peer].send(payload.encode())
-        else:
-            clients[sender].send("Your peer has disconnected.".encode())
-            end_private_session(sender)
-    else:
-        broadcast_message(f"{sender}: {message}", exclude=sender)
-
 def end_private_session(username):
-    """Ends a private session for a user."""
-    global sessions, session_keys
+    global sessions, session_secrets
 
     if username in sessions:
         peer = sessions.pop(username)
         sessions.pop(peer, None)
-        session_keys.pop(username, None)
-        session_keys.pop(peer, None)
+        session_secrets.pop(username, None)
+        session_secrets.pop(peer, None)
 
         clients[username].send("Private session ended.".encode())
         clients[peer].send("Private session ended.".encode())
 
+def route_message(sender, message):
+    global session_secrets
+
+    if sender in sessions:  # Handle private session
+        peer = sessions[sender]
+        if peer in clients:
+            try:
+                secret = session_secrets[sender]
+                encrypted_message = encrypt_message(secret, message)  # Encrypt binary
+                clients[peer].send(encrypted_message)  # Send binary
+                print(f"Debug: Sent encrypted message to {peer}")
+            except Exception as e:
+                print(f"Error encrypting message for {peer}: {e}")
+                clients[sender].send("Failed to send message. Please try again.".encode())
+        else:
+            clients[sender].send("Your peer has disconnected.".encode())
+            end_private_session(sender)
+    else:  # Handle public message
+        broadcast_message(f"{sender}: {message}", exclude=sender)
+
+
+
 def broadcast_message(message, exclude=None):
-    """
-    Broadcasts a message to all clients except the excluded one.
-    """
     for user, client in clients.items():
         if user != exclude:
             client.send(message.encode())
 
-
 def broadcast_client_list():
-    """
-    Sends an updated list of connected clients to all clients.
-    """
     client_list = list(clients.keys())
     message = f"Connected clients: {client_list}"
     for client in clients.values():
         client.send(message.encode())
 
-
 def disconnect_client(username):
-    """
-    Handles a client disconnecting.
-    """
-    global clients, sessions
+    global clients, sessions, session_secrets
 
     if username in clients:
         del clients[username]
@@ -228,14 +216,11 @@ def disconnect_client(username):
     if username in sessions:
         end_private_session(username)
 
+    session_secrets.pop(username, None)
     broadcast_client_list()
     print(f"{username} disconnected.")
 
-
 def start_server():
-    """
-    Starts the server and listens for client connections.
-    """
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind(('127.0.0.1', 12345))
     server_socket.listen(5)
@@ -245,6 +230,6 @@ def start_server():
         client_socket, client_address = server_socket.accept()
         threading.Thread(target=handle_client, args=(client_socket, client_address)).start()
 
-
+# Commented out the execution part to ensure safe implementation
 if __name__ == "__main__":
-    start_server()
+  start_server()

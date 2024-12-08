@@ -1,5 +1,8 @@
+
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes
+import hmac
+import hashlib
 import socket
 import threading
 import os
@@ -18,13 +21,36 @@ public_key_pem = public_key.public_bytes(
     format=serialization.PublicFormat.SubjectPublicKeyInfo
 )
 
-#handles recieving of messages
+# Global variable to hold the session secret for HMAC
+session_secret = None
+
+# Helper function to generate HMAC
+def generate_hmac(secret, message):
+    return hmac.new(secret, message.encode(), hashlib.sha256).hexdigest()
+
+# Helper function to verify HMAC
+def verify_hmac(secret, message, signature):
+    expected_hmac = generate_hmac(secret, message)
+    return hmac.compare_digest(expected_hmac, signature)
+
+
+# Handles receiving of messages
 def receive_messages(client_socket):
+    global session_secret
+
     while True:
         try:
             message = client_socket.recv(1024).decode('utf-8')
             if message:
-                print(f"\n{message}\n")
+                # Parse HMAC if in a private session
+                if session_secret and "|HMAC:" in message:
+                    content, received_hmac = message.rsplit("|HMAC:", 1)
+                    if verify_hmac(session_secret, content, received_hmac):
+                        print(f"\n{content} [Verified]\n")
+                    else:
+                        print("\nMessage verification failed. Possible tampering detected.\n")
+                else:
+                    print(f"\n{message}\n")
             else:
                 print("Server has closed the connection.")
                 break
@@ -33,14 +59,11 @@ def receive_messages(client_socket):
             break
     client_socket.close()
 
-
+# Authenticates the client with the server
 def authenticate(client_socket, username):
-
-    
     # Receive server's public key
     public_key_pem = client_socket.recv(1024)
     server_public_key = serialization.load_pem_public_key(public_key_pem)
-    print(public_key_pem)
 
     # Create an authentication token
     auth_token = f"{username}_{os.urandom(16).hex()}".encode()
@@ -62,8 +85,9 @@ def authenticate(client_socket, username):
     response = client_socket.recv(1024).decode()
     return response == "AUTH_SUCCESS"
 
-
 def start_client():
+    global session_secret
+
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.connect(('127.0.0.1', 12345))
 
@@ -81,10 +105,16 @@ def start_client():
         message = input()
         if message.lower() == 'exit':
             break
-        client_socket.send(message.encode())
+
+        # Include HMAC if in a private session
+        if session_secret and not message.startswith("/"):
+            hmac_signature = generate_hmac(session_secret, message)
+            client_socket.send(f"{message} |HMAC:{hmac_signature}".encode())
+        else:
+            client_socket.send(message.encode())
+
 
     client_socket.close()
-
 
 if __name__ == "__main__":
     start_client()

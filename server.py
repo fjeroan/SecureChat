@@ -1,11 +1,16 @@
+
 import socket
 import threading
+import hmac
+import hashlib
+import os
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes
 
 # Global mappings
 clients = {}
 sessions = {}
+session_secrets = {}
 
 # RSA key generation
 private_key = rsa.generate_private_key(
@@ -21,9 +26,17 @@ public_key_pem = public_key.public_bytes(
     format=serialization.PublicFormat.SubjectPublicKeyInfo
 )
 
-#Authenticates client
-def authenticate_client(client_socket):
+# Helper function to generate HMAC
+def generate_hmac(secret, message):
+    return hmac.new(secret, message.encode(), hashlib.sha256).hexdigest()
 
+# Helper function to verify HMAC
+def verify_hmac(secret, message, signature):
+    expected_hmac = generate_hmac(secret, message)
+    return hmac.compare_digest(expected_hmac, signature)
+
+# Authenticate client
+def authenticate_client(client_socket):
     try:
         # Send the public key to the client
         client_socket.send(public_key_pem)
@@ -50,10 +63,9 @@ def authenticate_client(client_socket):
         client_socket.send("AUTH_FAILURE".encode())
         return None
 
-#handles client communication
+# Handles client communication
 def handle_client(client_socket, client_address):
-
-    global clients, sessions
+    global clients, sessions, session_secrets
 
     print(f"Connection established with {client_address}")
 
@@ -63,7 +75,6 @@ def handle_client(client_socket, client_address):
         client_socket.close()
         return
 
-    # Adding the client to the connected clients list
     clients[username] = client_socket
     client_socket.send("AUTH_SUCCESS".encode())
     print(f"Clients connected: {list(clients.keys())}")
@@ -98,10 +109,8 @@ def handle_client(client_socket, client_address):
         disconnect_client(username)
         client_socket.close()
 
-#starting a private session
 def start_private_session(sender, message):
-
-    global sessions
+    global sessions, session_secrets
 
     parts = message.split(" ", 1)
     if len(parts) < 2:
@@ -117,57 +126,57 @@ def start_private_session(sender, message):
         clients[sender].send("One of you is already in a session.".encode())
         return
 
+    # Generate a shared secret for HMAC
+    secret = hashlib.sha256(os.urandom(16)).digest()
+    session_secrets[sender] = secret
+    session_secrets[target] = secret
+
     sessions[sender] = target
     sessions[target] = sender
     clients[sender].send(f"Private session started with {target}.".encode())
     clients[target].send(f"Private session started with {sender}.".encode())
 
-#ends a private session
 def end_private_session(username):
- 
-    global sessions
+    global sessions, session_secrets
 
     if username in sessions:
         peer = sessions.pop(username)
         sessions.pop(peer, None)
+        session_secrets.pop(username, None)
+        session_secrets.pop(peer, None)
 
         clients[username].send("Private session ended.".encode())
         clients[peer].send("Private session ended.".encode())
 
-#sends message to the correct client
 def route_message(sender, message):
+    global session_secrets
 
     if sender in sessions:
         peer = sessions[sender]
         if peer in clients:
-            clients[peer].send(f"[Private] {sender}: {message}".encode())
+            # Generate and attach HMAC to the message
+            secret = session_secrets[sender]
+            hmac_signature = generate_hmac(secret, message)
+            clients[peer].send(f"[Private] {sender}: {message}|HMAC:{hmac_signature}".encode())
         else:
             clients[sender].send("Your peer has disconnected.".encode())
             end_private_session(sender)
     else:
         broadcast_message(f"{sender}: {message}", exclude=sender)
 
-#serds message to all clientsd
 def broadcast_message(message, exclude=None):
-
     for user, client in clients.items():
         if user != exclude:
             client.send(message.encode())
 
-#send clientg list to all clients
 def broadcast_client_list():
-
     client_list = list(clients.keys())
     message = f"Connected clients: {client_list}"
     for client in clients.values():
         client.send(message.encode())
 
-#disconnects a client
 def disconnect_client(username):
-    """
-    Handles a client disconnecting.
-    """
-    global clients, sessions
+    global clients, sessions, session_secrets
 
     if username in clients:
         del clients[username]
@@ -175,14 +184,11 @@ def disconnect_client(username):
     if username in sessions:
         end_private_session(username)
 
+    session_secrets.pop(username, None)
     broadcast_client_list()
     print(f"{username} disconnected.")
 
-
 def start_server():
-    """
-    Starts the server and listens for client connections.
-    """
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind(('127.0.0.1', 12345))
     server_socket.listen(5)
@@ -192,6 +198,6 @@ def start_server():
         client_socket, client_address = server_socket.accept()
         threading.Thread(target=handle_client, args=(client_socket, client_address)).start()
 
-
+# Commented out the execution part to ensure safe implementation
 if __name__ == "__main__":
-    start_server()
+  start_server()
