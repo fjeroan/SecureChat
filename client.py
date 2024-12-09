@@ -42,13 +42,30 @@ def receive_messages(client_socket):
         try:
             message = client_socket.recv(1024).decode('utf-8')
             if message:
-                # Parse HMAC if in a private session
-                if session_secret and "|HMAC:" in message:
+                if message == "SESSION_START":
+                    # Receive the session secret
+                    session_secret = client_socket.recv(4096).strip()  # Strip any extra spaces or data
+                    print(f"[DEBUG] Session Secret (Client): {session_secret.hex()}")
+                    print(f"[DEBUG] Session Secret (Client): {session_secret.hex()}")
+
+                    print("Private session established. HMAC key received.")
+                elif session_secret and "|HMAC:" in message:
+               
+                 
                     content, received_hmac = message.rsplit("|HMAC:", 1)
+                    content = content.strip()  # Remove any trailing spaces or newline characters
+                    received_hmac = received_hmac.strip()  # Normalize the received HMAC
+                    
+                    expected_hmac = generate_hmac(session_secret, content)
+                    print(f"[DEBUG] Expected HMAC: {expected_hmac}")
+                    print(f"[DEBUG] Received HMAC: {received_hmac}")
+                    print(f"[DEBUG] Recieved message: {message}")
+                    
                     if verify_hmac(session_secret, content, received_hmac):
                         print(f"\n{content} [Verified]\n")
                     else:
                         print("\nMessage verification failed. Possible tampering detected.\n")
+
                 else:
                     print(f"\n{message}\n")
             else:
@@ -58,6 +75,7 @@ def receive_messages(client_socket):
             print(f"Error receiving message: {e}")
             break
     client_socket.close()
+
 
 # Authenticates the client with the server
 def authenticate(client_socket, username):
@@ -108,8 +126,13 @@ def start_client():
 
         # Include HMAC if in a private session
         if session_secret and not message.startswith("/"):
+            
             hmac_signature = generate_hmac(session_secret, message)
-            client_socket.send(f"{message} |HMAC:{hmac_signature}".encode())
+            print(hmac_signature)
+            formatted_message = f"{message}|HMAC:{hmac_signature}".strip()
+            print(f"\n[DEBUG] sent message: {formatted_message}")
+            client_socket.send(formatted_message.encode('utf-8'))
+
         else:
             client_socket.send(message.encode())
 

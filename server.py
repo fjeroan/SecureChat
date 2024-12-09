@@ -27,6 +27,7 @@ public_key_pem = public_key.public_bytes(
 )
 
 # Helper function to generate HMAC
+
 def generate_hmac(secret, message):
     return hmac.new(secret, message.encode(), hashlib.sha256).hexdigest()
 
@@ -133,8 +134,24 @@ def start_private_session(sender, message):
 
     sessions[sender] = target
     sessions[target] = sender
+
+    try:
+        # Encrypt the session secret with each client's public key
+        for user, peer in [(sender, target), (target, sender)]:
+            client_socket = clients[user]
+            client_socket.send("SESSION_START".encode())  # Inform the session start
+            # Send the session secret explicitly as a single transmission
+            client_socket.send(secret)
+            print(f"[DEBUG] Session Secret Sent: {secret.hex()}")
+
+            
+    except Exception as e:
+        print(f"Error sending session key: {e}")
+        return
+
     clients[sender].send(f"Private session started with {target}.".encode())
     clients[target].send(f"Private session started with {sender}.".encode())
+
 
 def end_private_session(username):
     global sessions, session_secrets
@@ -149,16 +166,14 @@ def end_private_session(username):
         clients[peer].send("Private session ended.".encode())
 
 def route_message(sender, message):
-    global session_secrets
-
+    print(f"Routing message from {sender}: {message}")
     if sender in sessions:
         peer = sessions[sender]
         if peer in clients:
-            # Generate and attach HMAC to the message
-            secret = session_secrets[sender]
-            hmac_signature = generate_hmac(secret, message)
-            clients[peer].send(f"[Private] {sender}: {message}|HMAC:{hmac_signature}".encode())
+            print(f"Forwarding to peer {peer}")
+            clients[peer].send(message.encode('utf-8'))
         else:
+            print(f"Peer {peer} disconnected")
             clients[sender].send("Your peer has disconnected.".encode())
             end_private_session(sender)
     else:

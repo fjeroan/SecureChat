@@ -1,12 +1,11 @@
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives import padding as sym_padding
-import os
+
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes
 import hmac
 import hashlib
 import socket
 import threading
+import os
 
 # RSA key generation
 private_key = rsa.generate_private_key(
@@ -22,44 +21,18 @@ public_key_pem = public_key.public_bytes(
     format=serialization.PublicFormat.SubjectPublicKeyInfo
 )
 
-# Global variable to hold the session secret for HMAC and encryption
+# Global variable to hold the session secret for HMAC
 session_secret = None
 
-# AES encryption
-def encrypt_message(secret, plaintext):
-    iv = os.urandom(16)  # Generate random IV
-    cipher = Cipher(algorithms.AES(secret), modes.CBC(iv))
-    encryptor = cipher.encryptor()
-
-    # Pad plaintext to be a multiple of block size
-    padder = sym_padding.PKCS7(128).padder()
-    padded_data = padder.update(plaintext.encode()) + padder.finalize()
-
-    ciphertext = encryptor.update(padded_data) + encryptor.finalize()
-    return iv + ciphertext  # Concatenate IV with ciphertext
-
-# AES decryption
-def decrypt_message(secret, data):
-    iv = data[:16]  # Extract IV
-    ciphertext = data[16:]
-
-    cipher = Cipher(algorithms.AES(secret), modes.CBC(iv))
-    decryptor = cipher.decryptor()
-
-    padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
-
-    # Remove padding
-    unpadder = sym_padding.PKCS7(128).unpadder()
-    plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()
-    return plaintext.decode()
-
-# HMAC functions (unchanged)
+# Helper function to generate HMAC
 def generate_hmac(secret, message):
     return hmac.new(secret, message.encode(), hashlib.sha256).hexdigest()
 
+# Helper function to verify HMAC
 def verify_hmac(secret, message, signature):
     expected_hmac = generate_hmac(secret, message)
     return hmac.compare_digest(expected_hmac, signature)
+
 
 # Handles receiving of messages
 def receive_messages(client_socket):
@@ -67,21 +40,34 @@ def receive_messages(client_socket):
 
     while True:
         try:
-            data = client_socket.recv(1024)  # Always receive as raw binary
-            if data:
-                if session_secret:  # Private session
-                    try:
-                        # Debug: Log raw received data
-                        print(f"Debug: Raw encrypted data received: {data}")
-                        
-                        # Attempt to decrypt
-                        decrypted_message = decrypt_message(session_secret, data)
-                        print(f"\n[Private Message] {decrypted_message}\n")
-                    except Exception as e:
-                        print(f"\nDecryption failed: {e}. Possible tampering detected.\n")
+            message = client_socket.recv(1024).decode('utf-8')
+            if message:
+                if message == "SESSION_START":
+                    # Receive the session secret
+                    session_secret = client_socket.recv(4096).strip()  # Strip any extra spaces or data
+                    print(f"[DEBUG] Session Secret (Client): {session_secret.hex()}")
+                    print(f"[DEBUG] Session Secret (Client): {session_secret.hex()}")
+
+                    print("Private session established. HMAC key received.")
+                elif session_secret and "|HMAC:" in message:
+               
+                 
+                    content, received_hmac = message.rsplit("|HMAC:", 1)
+                    content = content.strip()  # Remove any trailing spaces or newline characters
+                    received_hmac = received_hmac.strip()  # Normalize the received HMAC
+                    
+                    expected_hmac = generate_hmac(session_secret, content)
+                    print(f"[DEBUG] Expected HMAC: {expected_hmac}")
+                    print(f"[DEBUG] Received HMAC: {received_hmac}")
+                    print(f"[DEBUG] Recieved message: {message}")
+                    
+                    if verify_hmac(session_secret, content, received_hmac):
+                        print(f"\n{content} [Verified]\n")
+                    else:
+                        print("\nMessage verification failed. Possible tampering detected.\n")
+
                 else:
-                    # Decode public messages as UTF-8
-                    print(f"\n{data.decode('utf-8')}\n")
+                    print(f"\n{message}\n")
             else:
                 print("Server has closed the connection.")
                 break
@@ -90,12 +76,17 @@ def receive_messages(client_socket):
             break
     client_socket.close()
 
-# Client authentication (unchanged)
+
+# Authenticates the client with the server
 def authenticate(client_socket, username):
+    # Receive server's public key
     public_key_pem = client_socket.recv(1024)
     server_public_key = serialization.load_pem_public_key(public_key_pem)
 
+    # Create an authentication token
     auth_token = f"{username}_{os.urandom(16).hex()}".encode()
+
+    # Encrypt the token with the server's public key
     encrypted_token = server_public_key.encrypt(
         auth_token,
         padding.OAEP(
@@ -105,7 +96,10 @@ def authenticate(client_socket, username):
         )
     )
 
+    # Send the encrypted token
     client_socket.send(encrypted_token)
+
+    # Wait for the authentication response
     response = client_socket.recv(1024).decode()
     return response == "AUTH_SUCCESS"
 
@@ -130,13 +124,20 @@ def start_client():
         if message.lower() == 'exit':
             break
 
+        # Include HMAC if in a private session
         if session_secret and not message.startswith("/"):
-            encrypted_message = encrypt_message(session_secret, message)
-            client_socket.send(encrypted_message)
+            
+            hmac_signature = generate_hmac(session_secret, message)
+            print(hmac_signature)
+            formatted_message = f"{message}|HMAC:{hmac_signature}".strip()
+            print(f"\n[DEBUG] sent message: {formatted_message}")
+            client_socket.send(formatted_message.encode('utf-8'))
+
         else:
             client_socket.send(message.encode())
 
+
     client_socket.close()
-    
+
 if __name__ == "__main__":
     start_client()

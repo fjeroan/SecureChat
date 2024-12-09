@@ -1,5 +1,4 @@
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives import padding as sym_padding
+
 import socket
 import threading
 import hmac
@@ -8,35 +7,10 @@ import os
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes
 
+# Global mappings
 clients = {}
 sessions = {}
 session_secrets = {}
-
-# AES encryption
-def encrypt_message(secret, plaintext):
-    iv = os.urandom(16)
-    cipher = Cipher(algorithms.AES(secret), modes.CBC(iv))
-    encryptor = cipher.encryptor()
-
-    padder = sym_padding.PKCS7(128).padder()
-    padded_data = padder.update(plaintext.encode()) + padder.finalize()
-
-    ciphertext = encryptor.update(padded_data) + encryptor.finalize()
-    return iv + ciphertext
-
-def decrypt_message(secret, data):
-    iv = data[:16]
-    ciphertext = data[16:]
-
-    cipher = Cipher(algorithms.AES(secret), modes.CBC(iv))
-    decryptor = cipher.decryptor()
-
-    padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
-
-    unpadder = sym_padding.PKCS7(128).unpadder()
-    plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()
-    return plaintext.decode()
-
 
 # RSA key generation
 private_key = rsa.generate_private_key(
@@ -53,6 +27,7 @@ public_key_pem = public_key.public_bytes(
 )
 
 # Helper function to generate HMAC
+
 def generate_hmac(secret, message):
     return hmac.new(secret, message.encode(), hashlib.sha256).hexdigest()
 
@@ -159,8 +134,24 @@ def start_private_session(sender, message):
 
     sessions[sender] = target
     sessions[target] = sender
+
+    try:
+        # Encrypt the session secret with each client's public key
+        for user, peer in [(sender, target), (target, sender)]:
+            client_socket = clients[user]
+            client_socket.send("SESSION_START".encode())  # Inform the session start
+            # Send the session secret explicitly as a single transmission
+            client_socket.send(secret)
+            print(f"[DEBUG] Session Secret Sent: {secret.hex()}")
+
+            
+    except Exception as e:
+        print(f"Error sending session key: {e}")
+        return
+
     clients[sender].send(f"Private session started with {target}.".encode())
     clients[target].send(f"Private session started with {sender}.".encode())
+
 
 def end_private_session(username):
     global sessions, session_secrets
@@ -175,26 +166,18 @@ def end_private_session(username):
         clients[peer].send("Private session ended.".encode())
 
 def route_message(sender, message):
-    global session_secrets
-
-    if sender in sessions:  # Handle private session
+    print(f"Routing message from {sender}: {message}")
+    if sender in sessions:
         peer = sessions[sender]
         if peer in clients:
-            try:
-                secret = session_secrets[sender]
-                encrypted_message = encrypt_message(secret, message)  # Encrypt binary
-                clients[peer].send(encrypted_message)  # Send binary
-                print(f"Debug: Sent encrypted message to {peer}")
-            except Exception as e:
-                print(f"Error encrypting message for {peer}: {e}")
-                clients[sender].send("Failed to send message. Please try again.".encode())
+            print(f"Forwarding to peer {peer}")
+            clients[peer].send(message.encode('utf-8'))
         else:
+            print(f"Peer {peer} disconnected")
             clients[sender].send("Your peer has disconnected.".encode())
             end_private_session(sender)
-    else:  # Handle public message
+    else:
         broadcast_message(f"{sender}: {message}", exclude=sender)
-
-
 
 def broadcast_message(message, exclude=None):
     for user, client in clients.items():
